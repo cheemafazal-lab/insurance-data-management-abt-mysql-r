@@ -62,12 +62,6 @@ Medians and IQRs rather than means and standard deviations throughout, because a
 
 ---
 
-## Figures
-
-Five plots: customers by preferred channel, product uptake by channel, product uptake by age group, motor claim rate by channel, and a 30-bin vehicle value distribution.
-
----
-
 ## Why it's built twice
 
 The same pipeline exists in SQL and in R, and they do different halves of the job well. SQL constructs the base table and runs the structural audits — joins, uniqueness, null counts, referential logic — which is what a database is for. R does the cleaning decisions, the derived features and the visualisation, which is what SQL is bad at. Doing both is the point of the exercise: knowing which tool to reach for is most of data management.
@@ -99,4 +93,3 @@ MIT — see `LICENSE`.
 ## Notes
 
 Written with AI assistance for code drafting; the table design, quality rules and analytical questions are my own.
-AI assistance for code drafting; the table design, quality rules and analytical questions are my own.
