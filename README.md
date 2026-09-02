@@ -83,13 +83,20 @@ SOURCE insurance_abt.SQL;
 
 ```r
 # Requires: dplyr, ggplot2
-source("insurance_abt.R")
+source("insurance_ant_raw_code.R")
 ```
 
 Source data is not distributed with this repository.
 
 ---
 
+## Licence
+
+MIT — see `LICENSE`.
+
+---
+
 ## Notes
 
 Written with AI assistance for code drafting; the table design, quality rules and analytical questions are my own.
+AI assistance for code drafting; the table design, quality rules and analytical questions are my own.
