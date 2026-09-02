@@ -1,89 +1,95 @@
-# Airline Review Analytics
+# Insurance Analytics Base Table
 
-Predicting whether a passenger recommends an airline, from their ratings and the words they wrote — with two validation designs that a random split can't see.
+Building a single customer-level analytics table from four separate policy systems — in MySQL and in R — then using it to answer who buys what, through which channel.
 
-**Stack:** Python · pandas · scikit-learn · matplotlib
-**Data:** 23,171 reviews, 20 columns. Not included (coursework data).
-
----
-
-## What I found
-
-**Text and numbers together beat either alone.** Combining service ratings, engineered sentiment, categorical features and TF-IDF reaches **F1 0.936 / AUC 0.989** — about 2 F1 points above numbers alone and 8.5 above text alone.
-
-**A hand-built sentiment scorer works.** Rather than pulling in a heavy NLP dependency, I wrote a lexicon scorer with negation handling ("not very good" flips correctly) and square-root length normalisation. It separates recommenders from detractors cleanly, and it runs with no model downloads.
-
-**General and domain sentiment disagree — usefully.** Two lexicons run in parallel: general emotional language, and airline-operational language (*queue, baggage, overbooked, legroom, lounge*). Where they disagree, the review is usually one where the passenger liked the crew but hated the operation. That disagreement is itself a feature.
-
-**Contradictions were kept, not cleaned away.** Reviews rating 3/10 but recommending — and 8/10 but not recommending — are audited and retained rather than deleted. They're real nuance in customer language, and they feed the failure analysis.
-
-**Two stress tests probe what a random split hides.** Both hold the model fixed and change only the split rule, so any drop is attributable to distribution shift, not retuning:
-- **Temporal** — train on the earliest 75% of reviews, test on the most recent 25%. Does a model trained on the past still work on the future?
-- **Airline holdout** — remove the single most-reviewed carrier from training entirely and test on it alone. Does it generalise to an airline it has never seen?
-
-A random stratified split puts the same airline on both sides, so the model can quietly memorise carrier-specific rating habits. These two designs are what stop that going unnoticed.
+**Stack:** MySQL · R · dplyr · ggplot2
+**Data:** four source tables — customers, motor, health and travel policies. Not included (coursework data).
 
 ---
 
-## Method
+## The problem
 
-Single-command pipeline, no notebook cells, no NLP corpus downloads.
+An insurer holds its data in four places: one customer table, and three policy tables that don't talk to each other. Nobody can answer "how many of our customers hold more than one product" without joining them first.
 
-| Stage | What happens |
+The job is to build the **analytics base table** — one row per customer, every product flattened onto it — and then prove the table is trustworthy before anyone analyses anything with it.
+
+---
+
+## What the build does
+
+**One row per customer, left joins throughout.** Customers is the base; motor, health and travel are joined on their respective policy IDs. Left joins matter here — an inner join would silently drop every customer who doesn't hold all three products, which is most of them.
+
+**Column names are disambiguated on the way in.** Three policy tables each have a start date, an end date and a type. Flattened onto one row they'd collide, so they become `MotorPolicyStart`, `HealthPolicyStart`, `TravelPolicyStart` and so on. Unglamorous, and the thing that makes the table usable.
+
+**Product ownership is derived, not assumed.** `has_motor`, `has_health` and `has_travel` are set from whether a policy start date survived the join. This turns absence into a fact you can count.
+
+---
+
+## Data quality
+
+The table is audited before it's used, not after.
+
+| Check | Rule |
 |---|---|
-| Schema validation | All 20 expected columns enforced up front; fails loudly with the missing names |
-| Cleaning | Duplicate removal, ordinal-suffix date parsing, target/verified standardisation, range audit against declared valid ranges, median imputation with midpoint fallback |
-| Audits | Missing-value profile before *and* after, out-of-range counts, logical-conflict counts — a documented before/after evidence trail |
-| Features | Custom tokeniser (domain stopwords removed, negations preserved), two lexicon sentiment scores, disagreement flag, word count, TF-IDF (700 features, min_df 10) |
-| Models | Logistic regression via SGD and Complement NB, across numeric / text / combined feature sets |
-| Validation | Stratified 75/25 split, grid search, plus the two stress tests |
+| Impossible ages | `Age < 0` or `Age > 100` → NA rather than deleted, so the row survives for other analyses |
+| Missing claims | `clm` and `Numclaims` nulls → 0 — no policy record means no claims, not unknown claims |
+| Date logic | Policy end must be on or after policy start, checked for all three product lines |
+| Claim flag validity | Flag must be 0 or 1; anything else caught |
+| Negative claims | Claim counts below zero caught |
+| Invalid card type | `"0"` → NA |
+| Duplicates | Grouped by customer ID, anything appearing more than once flagged |
+| Key missingness | Null counts audited for age, gender, location and channel |
+| Uniqueness | Row count checked against distinct customer count — the test that the joins didn't fan out |
 
-Everything sits inside a scikit-learn `Pipeline`, so scaling and vectorisation are fitted per fold — no leakage across cross-validation.
+**Vehicle value is winsorised at the 99th percentile** rather than trimmed. Extreme vehicle values are real customers, not errors — capping keeps them in the table while stopping a handful of supercars dragging every mean.
+
+The row-count-versus-distinct-customer check is the important one. A left join that accidentally matches one-to-many inflates the table without any obvious symptom, and every downstream average silently becomes wrong.
 
 ---
 
-## Results
+## The analysis
 
-| Feature set | Model | Accuracy | Precision | Recall | F1 | ROC AUC |
-|---|---|---|---|---|---|---|
-| Combined | Logistic Regression (SGD) | **0.956** | 0.912 | 0.961 | **0.936** | **0.989** |
-| Numeric | Logistic Regression (SGD) | 0.942 | 0.896 | 0.936 | 0.915 | 0.985 |
-| Text | Logistic Regression (SGD) | 0.895 | 0.816 | 0.888 | 0.851 | 0.953 |
-| Text | Complement NB | 0.863 | 0.750 | 0.890 | 0.814 | 0.931 |
-| Numeric | Complement NB | 0.809 | 0.667 | 0.866 | 0.754 | 0.893 |
+Four questions, each a grouped aggregation off the finished table:
 
-Logistic regression beats Naive Bayes on every feature set. 5,793 test rows.
+| Output | What it computes |
+|---|---|
+| `q1_channel_profile` | Customers per communication channel — count, share, median age, age IQR |
+| `q2_uptake_by_channel` | Motor / health / travel uptake rate per channel |
+| `q3_uptake_by_age` | The same uptake rates by age group (under 30, 30–49, 50+, unknown) |
+| `q4_motor_claims_by_channel` | Motor holders only — claim rate, median and IQR of claim counts, median and IQR of exposure, by channel |
+
+Medians and IQRs rather than means and standard deviations throughout, because age and claim counts are both skewed and a mean would misdescribe them.
 
 ---
 
 ## Figures
 
-![Service attribute gap](outputs/05_management_service_gap_chart.png)
-
-The difference in mean rating between passengers who recommend and those who don't, per service attribute — sorted. This is the operational view: which parts of the service actually separate promoters from detractors, rather than which correlate with the overall score.
+Five plots: customers by preferred channel, product uptake by channel, product uptake by age group, motor claim rate by channel, and a 30-bin vehicle value distribution.
 
 ---
 
-## Limitations
+## Why it's built twice
 
-- **Overall rating predicts recommendation almost by definition.** They're near-redundant expressions of the same judgement, which is most of why numeric-only accuracy already sits at 0.94. Stated plainly rather than presented as predictive skill.
-- **Imputation is fitted before the split**, so the median constant leaks a little test information.
-- **Two-fold cross-validation** and unigrams only — a deliberately light search for reproducible single-threaded runtime, not exhaustive tuning.
-- Complement NB was not run on the combined feature set.
+The same pipeline exists in SQL and in R, and they do different halves of the job well. SQL constructs the base table and runs the structural audits — joins, uniqueness, null counts, referential logic — which is what a database is for. R does the cleaning decisions, the derived features and the visualisation, which is what SQL is bad at. Doing both is the point of the exercise: knowing which tool to reach for is most of data management.
 
 ---
 
 ## Run it
 
-```bash
-pip install pandas numpy matplotlib scikit-learn
-python airline_review_analysis.py
+```sql
+-- MySQL: creates the database, renames source tables, builds insurance.abt_insurance
+SOURCE insurance_abt.SQL;
 ```
 
-Place the source CSV alongside the script. Every figure and table is regenerated in one command, with a timestamped run log acting as a manifest.
+```r
+# Requires: dplyr, ggplot2
+source("insurance_abt.R")
+```
+
+Source data is not distributed with this repository.
 
 ---
 
 ## Notes
 
-Written in Python with AI assistance for code drafting; the analysis design, feature engineering choices and interpretation are my own.
+Written with AI assistance for code drafting; the table design, quality rules and analytical questions are my own.
